@@ -1,0 +1,42 @@
+version: 0.2
+
+env:
+  parameter-store:
+    ALB_URL: "/game/ALBDNSName"
+
+phases:
+  install:
+    runtime-versions:
+      docker: 18
+  pre_build:
+    commands:
+      - npm update -g npm
+      - npm install
+      - echo 'VUE_APP_SERVER='$ALB_URL > .env
+      - echo Building the S3 files...
+      - npm run build
+      - echo Logging in to Amazon ECR...
+      - aws --version
+      - $(aws ecr get-login --region $AWS_DEFAULT_REGION --no-include-email)
+      - REPOSITORY_URI=<AWS_ACCOUNT_ID>.dkr.ecr.ap-northeast-1.amazonaws.com/game-ui
+      - COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
+      - IMAGE_TAG=${COMMIT_HASH:=latest}
+  build:
+    commands:
+      - echo Build started on `date`
+      - echo Building the Docker image...
+      - docker build -t $REPOSITORY_URI:latest . --build-arg ALB_URL=$ALB_URL
+      - docker tag $REPOSITORY_URI:latest $REPOSITORY_URI:$IMAGE_TAG
+  post_build:
+    commands:
+      - echo Build completed on `date`
+      - echo Pushing the Docker images...
+      - docker push $REPOSITORY_URI:latest
+      - docker push $REPOSITORY_URI:$IMAGE_TAG
+      - echo Writing image definitions file...
+      - printf '{"Version":"1.0","ImageURI":"%s"}' $REPOSITORY_URI:$IMAGE_TAG > imageDetail.json
+      - echo upload s3
+      - aws s3 sync --exact-timestamps --delete ./dist/ s3://game-ui-s3-hosting
+artifacts:
+  files:
+    - imageDetail.json
